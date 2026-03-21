@@ -6,7 +6,7 @@
 
 - [ ] You are authorized to work in the United States (or will be by June 2026)
 - [ ] You are available for a **10-week on-site internship in Richmond, Virginia** (approximately June–August 2026). Our team works in person and we've found that interns learn faster with same-room collaboration. This is not a remote position.
-- [ ] You are proficient in written and spoken English
+- [ ] You are proficient in written and spoken English.
 - [ ] You are currently enrolled in (or have graduated within the past 12 months from) an undergraduate or graduate program, or have equivalent experience
 
 **Preference will be given to candidates interested in full-time employment in Richmond, Virginia after the internship.** The full-time role (pending continued NSF funding) is budgeted at **$70,000–$90,000/year**, which goes further in Richmond than in most tech hubs.
@@ -157,11 +157,11 @@ pytest tests/test_feedback_integration.py -v
 
 ## How Submissions Are Evaluated
 
-| Criterion                  | Weight | Method      | Description                                                                                    |
-| -------------------------- | ------ | ----------- | ---------------------------------------------------------------------------------------------- |
-| **Runs successfully**      | Gate   | Automated   | Server starts via Docker and responds to health check. **Fail = disqualified.**                |
-| **Schema compliance**      | Gate   | Automated   | ≥90% of responses match JSON schema. **Below threshold = disqualified.**                       |
-| **Response time**          | Gate   | Automated   | Each `/feedback` request must return within 30 seconds. **Timeouts = failures.**               |
+| Criterion                        | Weight | Method      | Description                                                                                    |
+| -------------------------------- | ------ | ----------- | ---------------------------------------------------------------------------------------------- |
+| **Runs successfully**      | Gate   | Automated   | Server starts via Docker and responds to health check.**Fail = disqualified.**           |
+| **Schema compliance**      | Gate   | Automated   | ≥90% of responses match JSON schema.**Below threshold = disqualified.**                 |
+| **Response time**          | Gate   | Automated   | Each `/feedback` request must return within 30 seconds. **Timeouts = failures.**       |
 | **Accuracy**               | 25%    | Absolute    | Corrections are linguistically accurate across a hidden test suite spanning multiple languages |
 | **Production feasibility** | 25%    | Comparative | Could this run at scale? Model choice, token efficiency, caching, cost reduction strategy      |
 | **Test quality**           | 25%    | Comparative | Your tests are meaningful, cover edge cases, and test real behavior                            |
