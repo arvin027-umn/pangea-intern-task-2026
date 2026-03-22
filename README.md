@@ -1,35 +1,4 @@
-# Pangea Chat: Gen AI Intern Task (Summer 2026)
-
-## ⚠️ Before You Begin: Eligibility Requirements
-
-**Do not invest time in this task unless you meet ALL of the following criteria:**
-
-- [ ] You are authorized to work in the United States (or will be by June 2026)
-- [ ] You are available for a **10-week on-site internship in Richmond, Virginia** (approximately June–August 2026). Our team works in person and we've found that interns learn faster with same-room collaboration. This is not a remote position.
-- [ ] You are proficient in written and spoken English.
-- [ ] You are currently enrolled in (or have graduated within the past 12 months from) an undergraduate or graduate program, or have equivalent experience
-
-**Preference will be given to candidates interested in full-time employment in Richmond, Virginia after the internship.** The full-time role (pending continued NSF funding) is budgeted at **$70,000–$90,000/year**, which goes further in Richmond than in most tech hubs.
-
-By submitting your solution, you confirm that you meet these requirements. See [RULES.md](RULES.md) for full terms.
-
----
-
-## About Pangea Chat
-
-[Pangea Chat](https://pangea.chat) is an AI-powered language learning app funded by the U.S. National Science Foundation. Students learn languages by chatting with peers, assisted by AI feedback tools: grammar checking, interactive translation, pronunciation help, and conversation activities.
-
-This task is modeled after real work you'd do as an intern on the team.
-
-## Why This Process
-
-We received over **2,200 applications** for up to **3 intern positions**. Resume screening alone can't give 2,200 people a fair shot. It inevitably favors school names and network connections over actual ability.
-
-So we built this task to let your skills speak for themselves. Everyone gets the same starter code, the same rubric, and the same week. Whether you're at a top-10 CS program or a community college, your submission is scored the same way.
-
-Is automated scoring perfect? No. But it's more equitable than a human skimming 2,200 resumes, and the top submissions all get human review.
-
-## The Task
+## Language Feedback API Task - Pangea Chat
 
 Build an **LLM-powered language feedback API** that analyzes learner-written sentences and returns structured correction feedback.
 
