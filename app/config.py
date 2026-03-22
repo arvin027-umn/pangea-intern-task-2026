@@ -1,5 +1,3 @@
-from typing import Literal
-
 validation_error_types = frozenset([
     "grammar",
     "spelling",

@@ -1,19 +1,137 @@
 ## Language Feedback API Task - Pangea Chat
 
-Build an **LLM-powered language feedback API** that analyzes learner-written sentences and returns structured correction feedback.
+Provided a sentence in a target language that the learner wants to learn and the language the learner is using to communicate with the API in (native language), the API returns a corrected sentence if the sentence was wrong, with the list of specific errors in simple language alongside a CEFR difficulty rating.
 
-Given a sentence in a target language and the learner's native language, your API must return:
+## Setup
 
-1. A **corrected sentence** (minimal edits that preserve the learner's voice)
-2. A list of **errors**, each with the original text, correction, error category, and a learner-friendly explanation written in the native language
-3. Whether the sentence **is correct** (boolean)
-4. A **CEFR difficulty rating** (A1–C2) based on sentence complexity
+```bash
+git clone https://github.com/arvin027-umn/intern-task-2026.git
+cd intern-task-2026
 
-### Endpoint
+cp .env.example .env
+# Edit .env and add your OPENAI_API_KEY for local integration testing
 
+# Start the server
+uvicorn app.main:app --reload
 ```
-POST /feedback
+
+In a second terminal, run:
+
+```bash
+curl http://localhost:8000/health
+# {"status": "ok"}
+
+curl -X POST http://localhost:8000/feedback \
+  -H "Content-Type: application/json" \
+  -d '{"sentence": "Yo soy fue al mercado ayer.", "target_language": "Spanish", "native_language": "English"}'
 ```
+
+### Run with Docker and tests
+
+```bash
+# Create the docker container
+docker compose up --build
+
+# All tests
+docker compose exec feedback-api pytest tests/ -v
+
+# Unit tests only (no API key needed)
+docker compose exec feedback-api pytest tests/test_api.py tests/test_feedback_unit.py tests/test_schema.py tests/test_edge_cases.py -v
+```
+
+### Design Decisions & Justifications
+
+#### General Design Pointers
+
+Every design decision I've made leads back a single question which is: what exactly is it that a language learner really needs when they submit their sentence?
+
+They need to shown what in their answer might be wrong, and they need to be able to understand it in simple language in the language they are using to communicate with the API. The reason I emphasize the simplicity of the feedback is that if it starts to sound like a textbook's explanations, it will bore the user. And, another thing to keep in mind here is the speed of the response, so the feedback needs to be sent to them at a pace that makes it feel like a friendly conversation.
+
+This influenced three specific choices I made in my system prompt:
+
+1. **Feedback/explanations need to be in the learner's native language**
+   1. A student that speaks french is attempting to learn English won't be able to effectively grasp the language they are trying to learn if they are given an explanation of their sentence in the target language.
+   2. The system prompt therefore reinforces this in different places, as in the step-by-step instructions, the explanation rules, the JSON response's description field, and within the user message.
+   3. Some of my earlier experiments showed the model ignoring this instruction, so I had it in multiple places to reinforce it for the model till the responses were reliably in the learner's native language
+2. **Minimalistic corrections**
+   1. In the system prompt there are specific instructions to not rephrase, restructure, or improve the sentence aside from fixing the errors in it. Because if a learner writes an awkwardly phrased sentence that is technically grammatically correct, then penalizing them for it will negatively impact their confidence.
+   2. The post-processing layer for the feedback enforces this by ensuring that if the model returns no errors, the corrected sentence is transformed back to the original input sentence as it was written by the learner.
+3. **CEFR Difficulty Level is about complexity, not mistakes made**
+   1. CEFR Difficulty Level is a reflection of complexity of sentence being attempted and not about how many mistakes the student made
+
+#### API Choice & Model Choice
+
+I chose OpenAI's API for its structured outputs feature that allows for strict JSON schema enforcement, and this feature has been in place for longer than Anthropic's structured outputs feature, and has a lot more developer support making it simpler to debug. Setting strict to true in the schema forces the model to only produce tokens that lead to valid JSON, therefore, invalid error types, missing fields and incorrect data types are impossible at the token level. OpenAI has certified that the schema compliance is 100% using this mode, and squashes many potential bugs that could come up.
+
+I chose gpt-4o-mini as the model for this task as it is the cheapest model supporting structured outputs, and can scale very well even though it may not be a reasoning giant like gpt-5-mini or the any of the other GPT-5 variants that have come out this year. Since the task description mentioned cost efficiency, this model felt like an easy choice to make. If reliability was more important and this were a production setting, I would swap the model out to use gpt-5-mini as it is a reasoning model and can add in an additional layer of intelligence over just autoregressively predicting the next token, which is essentially what gpt-4o-mini does. The cost of the model for 1M input and output tokens is only 0.15 USD and 0.60 USD respectively. With OpenAI's caching in place and the caching of the response I've implemented on my side for same sentence and same language pair, the cost remains relatively low per request and shouldn't go about 1-2 USD for every 10-15k requests.
+
+I've used OpenAI's Responses API over the Chat Completions API as OpenAI's docs specifically advise to use Responses for new projects and also due the prompt caching feature being offered. But I have also included fallbacks to the Chat Completions API with strict json_schema in case Responses API is unavailable, and Chat Completions API with json_object if for some reason the provider doesn't support json_schema like using Github Models.
+
+#### System Prompt
+
+The system prompt cotains 10 few-shot examples covering Spanish, French, Japanese, German, Korean, Mandarin Chinese, Portuguese, Arabic, English (with Spanish native speaker), and Russian to match the details given about the task's test suite in the FAQ.
+
+The examples in these different languages exist to demonstrate output format across different writing systems and error types, not to hand-hold the model through grammar it already has in its weights. Examples 1-4 and 7 come directly from `sample_inputs.json`. Examples 5, 6, and 8-10 were generated by the model and verified for linguistic accuracy via published grammar references (sources are documented in the integration test docstrings in `test_feedback_integration.py`).
+
+The prompt also contains a step-by-step reasoning section, beginning with reading the sentence carefully word by word, identifying every error, and for each error, determining the minimal span of incorrect text, and then providing a friendly and short response to the user about the errors in the sentence. This procedure is given to the model because structured reasoning improves accuracy on multi-error sentences where the model might otherwise miss the second or third error. All examples sit in the system prompt, so they are part of the static prefix that OpenAI caches, meaning the examples improve accuracy without increasing per-request cost after the first call.
+
+#### What happens if the LLM gets it wrong
+
+Despite the quality of the prompt, LLMs can still sometimes produce inconsistent output. I've handled this at multiple layers:
+
+**Structured Outputs:** The JSON schema is enforced at the token level. The schema includes enum constraints for all 12 error types and all 6 CEFR levels, plus `additionalProperties: false` on every object that restricts the model from randomly adding in fields to the JSON object. Invalid values cannot be generated.
+
+**Post-processing:** A `_post_process` function enforces logical consistency that the schema alone cannot express:
+
+- If there are errors but is_correct is true, it flips is_correct to false
+- If there are no errors but is_correct is false, it flips is_correct to true
+- If there are no errors, corrected_sentence is set to the original input exactly
+- If corrected_sentence is empty, it falls back to the original
+- If difficulty is not a valid CEFR level, it defaults to A2
+
+**Error type normalization:** LLMs sometimes return near-miss labels like verb_conjugation instead of conjugation, or typo instead of spelling. A normalization layer maps more than 20 common aliases to the correct allowed values. Completely unrecognized types become of type other instead of erroring out. This is tested with dedicated unit tests in `test_edge_cases.py`.
+
+**Retry with exponential backoff:** Transient API errors (timeouts, connection drops) and malformed JSON are retried up to 2 times with exponential backoff (1s, then 2s). But billing errors like insufficient_quota are never retried because they won't succeed. The function `_is_retryable_rate_limit` checks the error code before deciding.
+
+**Singleton HTTP client:** The OpenAI client is created once and reused across all requests, avoiding repeated TLS handshakes and connection setup. The client timeout is set to 25 seconds, to allow for some buffer time to be under the 30-second response timing requirement.
+
+#### Caching Strategy
+
+There are two layers of caching that have been added in, each attending to a different problem:
+
+**OpenAI prompt caching (automatic):**. The system prompt is about 2700 tokens and is identical across all requests. OpenAI caches prompt prefixes longer than 1024 tokens after the first call, therefore, subsequent requests skip re-processing the prompt. This should cut input token cost by a lot.
+
+**Application-level LRU cache** stores complete responses keyed by (sentence, target_language, native_language). If the same request is submitted again, the cached response is returned instantly with zero API cost and near-zero latency. In a real production setting this is of importance, if ten students are making the same mistake on the same exercise, it shouldn't trigger ten API calls. The cache holds up to 1024 entries with bounded memory. Language names are normalized (lowercased, stripped) for better cache hits. 
+
+#### Verifying Accuracy of outputs for languages I don't speak
+
+I don't speak Japanese, Korean, Russian, Arabic, or Chinese and I only know a little of French and Spanish. So, here is how I verified the API produces correct results for these languages:
+
+**Task-provided examples:** The sample_inputs.json file has known-correct expected outputs for Spanish, French, Japanese, German, and Portuguese, so I've used them as test cases in `test_feedback_integration.py`.
+
+**Published grammar references:** For languages beyond sample_inputs.json, I've cited specific grammar sources for Korean, Russian, Arabic, and Chinese in `test_feedback_integration.py`.
+
+**Structural consistency checks:** Even without knowing a language, the tests verify the following:
+
+1. If is_correct=false, does it have a non-empty errors list?
+2. Does the corrected sentence differ from the input?
+3. Is the difficulty a valid CEFR level? These will catch model failures regardless of language.
+
+#### Test Suite & What each test layer catches
+
+**test_api.py (12 tests)** tests the actual HTTP endpoints using FastAPI's TestClient: health check returns 200, POST-only health returns 405, missing/empty/invalid fields return 422, valid requests return 200 with correct JSON shape, Content-Type is application/json, unknown paths return 404. These catch issues that unit tests miss, like serialization bugs or FastAPI validation behavior.
+
+**test_feedback_unit.py (8 tests)** tests the feedback pipeline with mocked LLM responses. Covers Spanish conjugation, correct German sentence, French multiple errors, Japanese particles, Portuguese spelling with grammar, and Korean particles. Also tests that the cache prevents duplicate API calls (mock is called exactly once for two identical requests) and that all 12 error types are accepted by the parser.
+
+**test_edge_cases.py (25 tests)** tests the defensive layers that protect against bad LLM output. The TestPostProcessing class (6 tests) verifies that _post_process fixes is_correct/errors inconsistencies, restores the original sentence when there are no errors, handles empty corrected_sentence, and defaults invalid difficulty to A2. The TestErrorTypeNormalization class (6 tests) verifies alias mapping, case insensitivity, whitespace handling, and unknown-type fallback. Additional tests cover every error type (punctuation, word_order, extra_word, missing_word), Pydantic model validation, and retry behavior on transient API errors.
+
+**test_schema.py (17 tests)** validates that Pydantic models and JSON schema files agree on what is valid. Tests both request and response schemas: valid data passes, missing fields fail, invalid enums fail, extra fields are rejected. Validates every error type and CEFR level individually. Confirms all sample_inputs.json examples pass both schemas. Tests FeedbackRequest rejects empty sentences.
+
+**test_feedback_integration.py (12 tests)** makes real API calls across 10 languages: Spanish, French, German, Japanese, Portuguese, Korean, Arabic, Mandarin Chinese, Italian, and Russian, testing specific linguistic corrections, response time staying under 30 seconds, and that explanations respect the user's native language (Spanish explanations for an English error).
+
+### API Endpoints
+
+### POST /feedback
 
 **Request body** (see [schema/request.schema.json](schema/request.schema.json)):
 
@@ -43,185 +161,6 @@ POST /feedback
 }
 ```
 
-### Requirements
+### GET /health
 
-1. **Working HTTP endpoint:** must respond to `POST /feedback` with JSON conforming to the response schema
-2. **Health check:** `GET /health` must return a 200 response
-3. **Prompt engineering:** design a system prompt that reliably produces accurate, well-structured feedback
-4. **Test suite:** at least 5 test cases covering different languages, error types, and edge cases (correct sentences, multiple errors, non-Latin scripts)
-5. **README:** replace this README explaining your design decisions, prompt strategy, and how to run your solution
-6. **Docker support:** `docker compose up` must start your server on port 8000. Your Docker Compose service must be named `feedback-api` (as in the starter repo). Your test dependencies should be installed in the Docker image so tests can run inside the container.
-7. **Response time:** each request to `/feedback` must return within **30 seconds**. Requests that exceed this timeout will be treated as failures during scoring.
-
-### Allowed error types
-
-`grammar`, `spelling`, `word_choice`, `punctuation`, `word_order`, `missing_word`, `extra_word`, `conjugation`, `gender_agreement`, `number_agreement`, `tone_register`, `other`
-
-### Allowed difficulty levels
-
-`A1`, `A2`, `B1`, `B2`, `C1`, `C2` (CEFR scale)
-
-## Getting Started
-
-This repo contains a **complete, working submission** out of the box: the API endpoint, Dockerfile, Docker Compose config, JSON schemas, and a basic test suite all work as-is. You do not need to build any infrastructure from scratch. The boilerplate is done so you can focus your time on what matters: **your prompt, your accuracy, your tests, and your code quality.**
-
-Study the sample, then replace or rewrite it with your own approach. The sample is intentionally basic (a straightforward prompt with no caching, no retry logic, and minimal error handling), so treat it as a starting point rather than a ceiling.
-
-### Run locally
-
-```bash
-# 1. Clone and enter the repo
-git clone https://github.com/pangeachat/intern-task-2026.git
-cd intern-task-2026
-
-# 2. Create a virtual environment
-python -m venv .venv
-source .venv/bin/activate
-
-# 3. Install dependencies
-pip install -r requirements.txt
-
-# 4. Set your API key
-cp .env.example .env
-# Edit .env and add your OpenAI or Anthropic API key
-
-# 5. Start the server
-uvicorn app.main:app --reload
-
-# 6. Test it
-curl -X POST http://localhost:8000/feedback \
-  -H "Content-Type: application/json" \
-  -d '{"sentence": "Yo soy fue al mercado ayer.", "target_language": "Spanish", "native_language": "English"}'
-```
-
-### Run with Docker
-
-```bash
-cp .env.example .env
-# Edit .env with your API key
-docker compose up --build
-```
-
-### Run tests
-
-```bash
-# Unit tests (no API key needed)
-pytest tests/test_feedback_unit.py tests/test_schema.py -v
-
-# Integration tests (requires API key in .env)
-pytest tests/test_feedback_integration.py -v
-```
-
-## How to Submit
-
-1. **Fork** this repository
-2. Replace the sample implementation with your own
-3. Make sure `docker compose up` works and passes the health check
-4. Push to your fork
-5. **Fill out the [submission form](https://forms.gle/Nb2aqYvtY12efX2bA)** with your name, email, and the link to your fork
-
-**Use the same email you applied with on Handshake.** This is how we match your submission to your application.
-
-**Deadline: Sunday, March 22, 2026 at 11:59 PM Eastern Time.** Late submissions will not be evaluated.
-
-## How Submissions Are Evaluated
-
-| Criterion                        | Weight | Method      | Description                                                                                    |
-| -------------------------------- | ------ | ----------- | ---------------------------------------------------------------------------------------------- |
-| **Runs successfully**      | Gate   | Automated   | Server starts via Docker and responds to health check.**Fail = disqualified.**           |
-| **Schema compliance**      | Gate   | Automated   | ≥90% of responses match JSON schema.**Below threshold = disqualified.**                 |
-| **Response time**          | Gate   | Automated   | Each `/feedback` request must return within 30 seconds. **Timeouts = failures.**       |
-| **Accuracy**               | 25%    | Absolute    | Corrections are linguistically accurate across a hidden test suite spanning multiple languages |
-| **Production feasibility** | 25%    | Comparative | Could this run at scale? Model choice, token efficiency, caching, cost reduction strategy      |
-| **Test quality**           | 25%    | Comparative | Your tests are meaningful, cover edge cases, and test real behavior                            |
-| **Code & prompt quality**  | 25%    | Comparative | Clean code, thoughtful prompt design, clear README                                             |
-
-> **How comparative scoring works:** Accuracy is scored on an absolute scale: your API is tested against a hidden test suite and judged on correctness. The three subjective dimensions (production feasibility, test quality, code & prompt quality) are evaluated through **direct head-to-head comparison** between submissions. This means your rating in these dimensions reflects how your approach compares to other applicants, not an arbitrary absolute threshold. We use this approach because LLMs are more reliable at saying "A is better than B" than at assigning consistent absolute scores. (Think of how judges at competitions compare entries side by side.)
-
-## What We're Looking For
-
-- **Prompt engineering skill.** Can you get an LLM to reliably produce structured, accurate output?
-- **Software craft.** Clean code, proper error handling, good test coverage.
-- **Product thinking.** Do your design decisions reflect someone who thinks about the end user (a language learner)?
-- **Cost-effectiveness.** Could this run in production without burning money? Model choice, token usage, and caching strategy matter.
-- **Communication.** Can you explain your approach clearly in writing?
-
-## When Is My Submission "Done"?
-
-Your submission is ready when:
-
-1. **It works**: `docker compose up` starts cleanly, the health check passes, and `/feedback` returns valid JSON for a variety of inputs (different languages, correct sentences, sentences with errors, non-Latin scripts).
-2. **It's tested**: You have a meaningful test suite that you'd be comfortable showing to a colleague.
-3. **It's explained**: Your README describes what you built, why you made the choices you did, and how to run it.
-4. **You'd ship it**: If someone said "we're deploying this tomorrow," you wouldn't be embarrassed.
-
-Don't chase perfection. A clean, working submission that does the basics well will outperform an ambitious half-finished one. Depth in one area (a great prompt, a thorough test suite, a clever optimization) can set you apart, but only if the foundations are solid first.
-
-Your submission must use **Python** and either **OpenAI** or **Anthropic** as your LLM provider. You are free to use any Python web framework (FastAPI, Flask, Django, etc.) and any OpenAI or Anthropic model. The sample submission uses Python + FastAPI + OpenAI.
-
-> **Important**: The automated scorer runs your tests _inside_ your Docker container via `docker compose exec feedback-api`. Make sure your test dependencies are installed in your Docker image and that your Docker Compose service is named `feedback-api`.
-
-## Example I/O
-
-See [examples/sample_inputs.json](examples/sample_inputs.json) for 5 example input/output pairs covering Spanish, French, Japanese, German, and Portuguese.
-
-## FAQ
-
-**What LLM can I use?**
-OpenAI or Anthropic. You can use any model from either provider, and you can chain or combine models from both. Your choice of model is part of your design, so own it and explain it in your README.
-
-**Do I have to use Python / FastAPI / OpenAI?**
-Python is required. FastAPI is not: you can use Flask, Django, or any other Python web framework. For LLM providers, you must use OpenAI, Anthropic, or both.
-
-**Do I need to pay for an API key?**
-OpenAI and Anthropic both offer free trial credits for new accounts, which should be more than enough for this task.
-
-**Can I use AI tools like ChatGPT or Copilot?**
-Yes, fully allowed. See the [AI Use section in RULES.md](RULES.md#ai-use) for our take on this.
-
-**What if my API returns slightly different output than the examples?**
-That's fine. The examples show the shape we expect. Exact wording of explanations, corrections, etc. will naturally vary. Your response must conform to the JSON schema, but the linguistic content is judged on accuracy, not exact string matching.
-
-**What if the input sentence is already correct?**
-Return `is_correct: true`, an empty `errors` array, and set `corrected_sentence` to the original sentence. This is tested.
-
-**How many languages do I need to support?**
-Your API should handle any language a user might submit. The hidden test suite covers 8+ languages including non-Latin scripts (Japanese, Korean, Russian, Chinese). You don't need language-specific logic (the LLM handles this), but your prompt should be robust enough to work across scripts and writing systems.
-
-**Do I need to speak the languages being tested?**
-No. The whole point is that the LLM does the linguistic heavy lifting. But you should think about how to verify accuracy for languages you don't know (hint: that's a good thing to discuss in your README).
-
-**Can I modify the JSON schemas?**
-No. Your response must conform to the provided `schema/response.schema.json`. You can add extra fields, but the required fields and their types must match.
-
-**What does "replace this README" mean?**
-When you submit, your fork's README should describe _your_ approach: your design decisions, prompt strategy, how to run it, and anything interesting you tried. Delete the task description and write your own.
-
-**What if Docker isn't working on my machine?**
-Your server must be runnable via `docker compose up`. If you're having Docker issues locally, make sure your Dockerfile works. We will run it in a clean environment. If you need help, that's a fine thing to Google or ask an AI about.
-
-**Is housing provided for the internship?**
-No. The internship is on-site in Richmond, Virginia. You are responsible for your own housing and transportation. Richmond has a relatively low cost of living compared to major tech hubs. Summer sublets near VCU and the Fan District are typically $600–900/month.
-
-**I'm an international student with a valid work permit (e.g., CPT/OPT). Am I eligible?**
-Yes, as long as you are authorized to work in the United States during the internship period (June–August 2026). We do not sponsor employment visas, but existing work authorization (CPT, OPT, etc.) is fine.
-
-**Will I get feedback on my submission if I'm not selected?**
-We can't provide individual feedback to all applicants given the volume, but we may publish general observations about what strong submissions had in common.
-
-**Can I start over after forking?**
-Yes. You can `git push --force` as many times as you like before the deadline. We only evaluate what's in your fork at the time the deadline passes.
-
-**Who reviews the submissions?**
-Initial scoring is fully automated (Docker build, schema validation, accuracy testing). Accuracy is scored by an LLM judge that runs **twice per submission** and averages the scores to reduce variance. Subjective dimensions (production feasibility, test quality, code quality) are scored through head-to-head comparison between submissions, so your rating reflects how your approach stacks up against the pool. The top submissions are reviewed in full by humans on the Pangea Chat team.
-
-**I'm uncomfortable with automated scoring.**
-We understand. We chose transparency over black-box screening: you can see exactly what's evaluated and how. The automated pipeline produces a shortlist; it does not make the hiring decision. Every top submission is reviewed in full by humans on our team.
-
-## Questions?
-
-If something is ambiguous, make a reasonable assumption, state it in your README, and move forward. This is part of the evaluation. We want to see how you handle ambiguity.
-
----
-
-See [RULES.md](RULES.md) for full assessment rules, eligibility, and legal terms.
+Returns `{"status": "ok"}` with a 200 status code.
