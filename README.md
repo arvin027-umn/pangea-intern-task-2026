@@ -39,6 +39,42 @@ docker compose exec feedback-api pytest tests/ -v
 docker compose exec feedback-api pytest tests/test_api.py tests/test_feedback_unit.py tests/test_schema.py tests/test_edge_cases.py -v
 ```
 
+### API Endpoints
+
+### POST /feedback
+
+**Request body** (see [schema/request.schema.json](schema/request.schema.json)):
+
+```json
+{
+  "sentence": "Yo soy fue al mercado ayer.",
+  "target_language": "Spanish",
+  "native_language": "English"
+}
+```
+
+**Response body** (see [schema/response.schema.json](schema/response.schema.json)):
+
+```json
+{
+  "corrected_sentence": "Yo fui al mercado ayer.",
+  "is_correct": false,
+  "errors": [
+    {
+      "original": "soy fue",
+      "correction": "fui",
+      "error_type": "conjugation",
+      "explanation": "You mixed two verb forms. 'Soy' is present tense of 'ser' (to be), and 'fue' is past tense of 'ir' (to go). You only need 'fui' (I went)."
+    }
+  ],
+  "difficulty": "A2"
+}
+```
+
+### GET /health
+
+Returns `{"status": "ok"}` with a 200 status code.
+
 ### Design Decisions & Justifications
 
 #### General Design Pointers
@@ -75,7 +111,7 @@ The examples in these different languages exist to demonstrate output format acr
 
 The prompt also contains a step-by-step reasoning section, beginning with reading the sentence carefully word by word, identifying every error, and for each error, determining the minimal span of incorrect text, and then providing a friendly and short response to the user about the errors in the sentence. This procedure is given to the model because structured reasoning improves accuracy on multi-error sentences where the model might otherwise miss the second or third error. All examples sit in the system prompt, so they are part of the static prefix that OpenAI caches, meaning the examples improve accuracy without increasing per-request cost after the first call.
 
-#### What happens if the LLM gets it wrong
+### What happens if the LLM gets it wrong
 
 Despite the quality of the prompt, LLMs can still sometimes produce inconsistent output. I've handled this at multiple layers:
 
@@ -95,15 +131,15 @@ Despite the quality of the prompt, LLMs can still sometimes produce inconsistent
 
 **Singleton HTTP client:** The OpenAI client is created once and reused across all requests, avoiding repeated TLS handshakes and connection setup. The client timeout is set to 25 seconds, to allow for some buffer time to be under the 30-second response timing requirement.
 
-#### Caching Strategy
+### Caching Strategy
 
 There are two layers of caching that have been added in, each attending to a different problem:
 
 **OpenAI prompt caching (automatic):**. The system prompt is about 2700 tokens and is identical across all requests. OpenAI caches prompt prefixes longer than 1024 tokens after the first call, therefore, subsequent requests skip re-processing the prompt. This should cut input token cost by a lot.
 
-**Application-level LRU cache** stores complete responses keyed by (sentence, target_language, native_language). If the same request is submitted again, the cached response is returned instantly with zero API cost and near-zero latency. In a real production setting this is of importance, if ten students are making the same mistake on the same exercise, it shouldn't trigger ten API calls. The cache holds up to 1024 entries with bounded memory. Language names are normalized (lowercased, stripped) for better cache hits. 
+**Application-level LRU cache** stores complete responses keyed by (sentence, target_language, native_language). If the same request is submitted again, the cached response is returned instantly with zero API cost and near-zero latency. In a real production setting this is of importance, if ten students are making the same mistake on the same exercise, it shouldn't trigger ten API calls. The cache holds up to 1024 entries with bounded memory. Language names are normalized (lowercased, stripped) for better cache hits.
 
-#### Verifying Accuracy of outputs for languages I don't speak
+### Verifying Accuracy of outputs for languages I don't speak
 
 I don't speak Japanese, Korean, Russian, Arabic, or Chinese and I only know a little of French and Spanish. So, here is how I verified the API produces correct results for these languages:
 
@@ -117,7 +153,7 @@ I don't speak Japanese, Korean, Russian, Arabic, or Chinese and I only know a li
 2. Does the corrected sentence differ from the input?
 3. Is the difficulty a valid CEFR level? These will catch model failures regardless of language.
 
-#### Test Suite & What each test layer catches
+### Test Suite & What each test layer catches
 
 **test_api.py (12 tests)** tests the actual HTTP endpoints using FastAPI's TestClient: health check returns 200, POST-only health returns 405, missing/empty/invalid fields return 422, valid requests return 200 with correct JSON shape, Content-Type is application/json, unknown paths return 404. These catch issues that unit tests miss, like serialization bugs or FastAPI validation behavior.
 
@@ -128,39 +164,3 @@ I don't speak Japanese, Korean, Russian, Arabic, or Chinese and I only know a li
 **test_schema.py (17 tests)** validates that Pydantic models and JSON schema files agree on what is valid. Tests both request and response schemas: valid data passes, missing fields fail, invalid enums fail, extra fields are rejected. Validates every error type and CEFR level individually. Confirms all sample_inputs.json examples pass both schemas. Tests FeedbackRequest rejects empty sentences.
 
 **test_feedback_integration.py (12 tests)** makes real API calls across 10 languages: Spanish, French, German, Japanese, Portuguese, Korean, Arabic, Mandarin Chinese, Italian, and Russian, testing specific linguistic corrections, response time staying under 30 seconds, and that explanations respect the user's native language (Spanish explanations for an English error).
-
-### API Endpoints
-
-### POST /feedback
-
-**Request body** (see [schema/request.schema.json](schema/request.schema.json)):
-
-```json
-{
-  "sentence": "Yo soy fue al mercado ayer.",
-  "target_language": "Spanish",
-  "native_language": "English"
-}
-```
-
-**Response body** (see [schema/response.schema.json](schema/response.schema.json)):
-
-```json
-{
-  "corrected_sentence": "Yo fui al mercado ayer.",
-  "is_correct": false,
-  "errors": [
-    {
-      "original": "soy fue",
-      "correction": "fui",
-      "error_type": "conjugation",
-      "explanation": "You mixed two verb forms. 'Soy' is present tense of 'ser' (to be), and 'fue' is past tense of 'ir' (to go). You only need 'fui' (I went)."
-    }
-  ],
-  "difficulty": "A2"
-}
-```
-
-### GET /health
-
-Returns `{"status": "ok"}` with a 200 status code.
