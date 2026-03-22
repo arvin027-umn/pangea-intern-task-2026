@@ -11,6 +11,13 @@ cd intern-task-2026
 cp .env.example .env
 # Edit .env and add your API key for local integration testing
 
+# Create a virtual environment
+python -m venv .venv
+source .venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
 # Start the server
 uvicorn app.main:app --reload
 ```
