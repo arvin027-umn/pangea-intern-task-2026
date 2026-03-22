@@ -10,7 +10,7 @@ from app.main import app
 - Verify the HTTP endpoints, not just internal functions, and catches issues
 such as incorrect response status codes, missing headers, validation errors from FastAPI,
 and serialization problems that unit tests miss
-- LLM calls are mocked for deterministci testing
+- LLM calls are mocked for deterministic testing
 """
 
 def _mock_completion(response_data: dict) -> MagicMock:
